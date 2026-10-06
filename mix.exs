@@ -34,6 +34,11 @@ defmodule LiveViewVisualizer.MixProject do
   defp deps do
     [
       {:telemetry, "~> 1.0"},
+      # Optional: the LiveView instrumentation activates only when the host
+      # application depends on Phoenix LiveView itself.
+      {:phoenix_live_view, "~> 1.0", optional: true},
+      {:lazy_html, ">= 0.1.0", only: :test, runtime: false},
+      {:jason, "~> 1.0", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]

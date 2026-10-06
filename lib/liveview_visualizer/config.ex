@@ -26,9 +26,10 @@ defmodule LiveViewVisualizer.Config do
       as substrings, in addition to the built-in list in
       `LiveViewVisualizer.Sanitizer`. Defaults to `[]`.
 
-    * `:instrumentations` - modules implementing `LiveViewVisualizer.Instrumentation`
-      to attach on startup. Defaults to `[]`. This is an extension point. Phase 1
-      ships no built-in instrumentation.
+    * `:instrumentations` - additional modules implementing
+      `LiveViewVisualizer.Instrumentation` to attach on startup. Defaults to `[]`.
+      The built-in `LiveViewVisualizer.Instrumentation.LiveView` is always
+      attached and does not need to be listed.
 
   Most options are read once when the application starts. Changing them at runtime
   requires restarting the `:liveview_visualizer` application.

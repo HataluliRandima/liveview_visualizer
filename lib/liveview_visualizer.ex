@@ -2,7 +2,12 @@ defmodule LiveViewVisualizer do
   @moduledoc """
   Development-time observability for Phoenix LiveView.
 
-  This is the foundation release (Phase 1). It provides:
+  When enabled with `config :liveview_visualizer, enabled: true`, LiveView and
+  LiveComponent lifecycle events are recorded automatically (see
+  `LiveViewVisualizer.Instrumentation.LiveView`) and can be inspected with
+  `recent_events/1`. No changes to LiveView modules are needed.
+
+  The building blocks are:
 
     * `LiveViewVisualizer.Config` - centralized, safe-by-default configuration
     * `LiveViewVisualizer.Event` - the normalized event representation
@@ -11,8 +16,8 @@ defmodule LiveViewVisualizer do
     * `LiveViewVisualizer.Telemetry` - failure-isolated `:telemetry` handler management
     * `LiveViewVisualizer.Instrumentation` - the behaviour that event sources implement
 
-  No LiveView, Ecto, process or PubSub instrumentation ships yet. See the README
-  for the roadmap.
+  Ecto, process and PubSub instrumentation and the dashboard are not implemented
+  yet. See the README for the roadmap.
   """
 
   alias LiveViewVisualizer.{Config, Event, Store}
