@@ -175,7 +175,13 @@ defmodule LiveViewVisualizer.TelemetryTest do
 
       restart_child(Telemetry)
 
-      assert Telemetry.attached() == [TestInstrumentation]
+      # Built-in instrumentations come first, then configured ones; the
+      # EmptyInstrumentation is skipped because it declares no events.
+      assert Telemetry.attached() == [
+               LiveViewVisualizer.Instrumentation.LiveView,
+               TestInstrumentation
+             ]
+
       emit_work()
       assert [%Event{name: :work}] = Store.recent()
     end

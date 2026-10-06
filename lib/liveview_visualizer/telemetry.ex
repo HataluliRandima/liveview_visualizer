@@ -6,6 +6,14 @@ defmodule LiveViewVisualizer.Telemetry do
   instrumentations on start and detaches them when it terminates, so the
   attachments live and die with the visualizer's supervision tree.
 
+  ## Built-in instrumentations
+
+  `LiveViewVisualizer.Instrumentation.LiveView` is always attached first,
+  followed by any modules configured under `:instrumentations`. An
+  instrumentation whose library is not installed (its
+  `c:LiveViewVisualizer.Instrumentation.events/0` returns `[]`) is skipped with
+  a debug log. Nothing needs to be configured besides `enabled: true`.
+
   ## Failure isolation
 
   `:telemetry` runs handlers synchronously in the process that emitted the event,
@@ -29,14 +37,17 @@ defmodule LiveViewVisualizer.Telemetry do
 
   require Logger
 
-  alias LiveViewVisualizer.{Collector, Config, Sanitizer}
+  alias LiveViewVisualizer.{Collector, Config, Instrumentation, Sanitizer}
+
+  @builtin_instrumentations [Instrumentation.LiveView]
 
   @doc """
   Starts the handler manager.
 
   ## Options
 
-    * `:instrumentations` - modules to attach on start. Defaults to
+    * `:instrumentations` - modules to attach on start. Defaults to the
+      built-in instrumentations followed by
       `LiveViewVisualizer.Config.instrumentations/0`.
 
   """
@@ -110,7 +121,7 @@ defmodule LiveViewVisualizer.Telemetry do
       attached: []
     }
 
-    instrumentations = Keyword.get_lazy(opts, :instrumentations, &Config.instrumentations/0)
+    instrumentations = Keyword.get_lazy(opts, :instrumentations, &default_instrumentations/0)
 
     state =
       Enum.reduce(instrumentations, state, fn instrumentation, state ->
@@ -163,6 +174,10 @@ defmodule LiveViewVisualizer.Telemetry do
   @impl GenServer
   def terminate(_reason, state) do
     Enum.each(state.attached, &:telemetry.detach(handler_id(&1)))
+  end
+
+  defp default_instrumentations do
+    Enum.uniq(@builtin_instrumentations ++ Config.instrumentations())
   end
 
   defp do_attach(instrumentation, state) do

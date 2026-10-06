@@ -21,8 +21,12 @@ defmodule LiveViewVisualizer.Event do
       can be added without changing this module.
     * `:name` - the operation within the category, for example `:mount`,
       `:handle_event` or `:query`.
-    * `:status` - `:ok` if the operation completed, `:error` if it raised, threw
-      or exited.
+    * `:status` - the outcome of the operation:
+      * `:ok` - it completed normally
+      * `:exception` - it raised, threw or exited. This corresponds to a
+        `:telemetry` span `:exception` event.
+      * `:error` - it completed but reported a failure, for example a query
+        that returned an error tuple. Reserved for future instrumentations.
     * `:module` - the module the operation belongs to, such as the LiveView module.
     * `:pid` - the process that performed the operation.
     * `:source` - the raw `:telemetry` event name this event was built from, if any.
@@ -45,7 +49,7 @@ defmodule LiveViewVisualizer.Event do
   @typedoc "Unique event identifier, see `new_id/0`."
   @type id :: pos_integer()
 
-  @type status :: :ok | :error
+  @type status :: :ok | :exception | :error
 
   @type t :: %__MODULE__{
           id: id(),
@@ -217,7 +221,7 @@ defmodule LiveViewVisualizer.Event do
   defp valid?(:trace_id, value), do: is_nil(value) or pos_integer?(value)
   defp valid?(:type, value), do: is_atom(value) and not is_nil(value)
   defp valid?(:name, value), do: is_atom(value) and not is_nil(value)
-  defp valid?(:status, value), do: value in [:ok, :error]
+  defp valid?(:status, value), do: value in [:ok, :exception, :error]
   defp valid?(:module, value), do: is_atom(value)
   defp valid?(:pid, value), do: is_nil(value) or is_pid(value)
 
