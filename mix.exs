@@ -37,6 +37,12 @@ defmodule LiveViewVisualizer.MixProject do
       # Optional: the LiveView instrumentation activates only when the host
       # application depends on Phoenix LiveView itself.
       {:phoenix_live_view, "~> 1.0", optional: true},
+      # Optional: the Ecto instrumentation activates only when the host
+      # application uses Ecto itself.
+      {:ecto, "~> 3.10", optional: true},
+      # Real database for the integration tests, started by test_helper.exs.
+      {:ecto_sql, "~> 3.10", only: :test, runtime: false},
+      {:postgrex, ">= 0.0.0", only: :test, runtime: false},
       {:lazy_html, ">= 0.1.0", only: :test, runtime: false},
       {:jason, "~> 1.0", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

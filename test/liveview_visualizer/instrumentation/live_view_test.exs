@@ -43,13 +43,21 @@ defmodule LiveViewVisualizer.Instrumentation.LiveViewTest do
   end
 
   describe "events_for/1" do
-    test "attaches :stop and :exception of every span, never :start" do
+    test "attaches :start, :stop and :exception of every span" do
       events = Instrumentation.events_for("1.0.19")
 
       assert Enum.sort(events) ==
-               Enum.sort(for s <- @spans, x <- [:stop, :exception], do: s ++ [x])
+               Enum.sort(for s <- @spans, x <- [:start, :stop, :exception], do: s ++ [x])
+    end
 
-      refute Enum.any?(events, &(List.last(&1) == :start))
+    test ":start records nothing" do
+      metadata = %{socket: socket(), telemetry_span_context: make_ref()}
+
+      assert Instrumentation.handle_event(
+               [:phoenix, :live_view, :mount, :start],
+               %{monotonic_time: System.monotonic_time(), system_time: System.system_time()},
+               metadata
+             ) == :ignore
     end
 
     test "adds the destroyed event only from LiveView 1.1.0" do

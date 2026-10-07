@@ -179,6 +179,7 @@ defmodule LiveViewVisualizer.TelemetryTest do
       # EmptyInstrumentation is skipped because it declares no events.
       assert Telemetry.attached() == [
                LiveViewVisualizer.Instrumentation.LiveView,
+               LiveViewVisualizer.Instrumentation.Ecto,
                TestInstrumentation
              ]
 
