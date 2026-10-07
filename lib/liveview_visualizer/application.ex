@@ -6,6 +6,7 @@ defmodule LiveViewVisualizer.Application do
 
       LiveViewVisualizer.Supervisor (one_for_one)
       ├── LiveViewVisualizer.Store       owns the ETS ring buffer
+      ├── LiveViewVisualizer.PubSub      change notifications (if Phoenix.PubSub is available)
       └── LiveViewVisualizer.Telemetry   owns the :telemetry handler attachments
 
   The Store starts first so the table exists before any handler can fire. The
@@ -30,6 +31,16 @@ defmodule LiveViewVisualizer.Application do
     )
   end
 
-  defp children(true), do: [LiveViewVisualizer.Store, LiveViewVisualizer.Telemetry]
+  defp children(true) do
+    Enum.reject(
+      [
+        LiveViewVisualizer.Store,
+        LiveViewVisualizer.Notifier.child_spec_if_available(),
+        LiveViewVisualizer.Telemetry
+      ],
+      &is_nil/1
+    )
+  end
+
   defp children(false), do: []
 end

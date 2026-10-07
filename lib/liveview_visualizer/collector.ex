@@ -3,15 +3,16 @@ defmodule LiveViewVisualizer.Collector do
   The single path through which observed events reach the store.
 
   Instrumentations produce `LiveViewVisualizer.Event` structs. The collector
-  sanitizes their metadata and measurements and records them. Keeping this in
-  one place guarantees that nothing is stored unsanitized, whatever the source.
+  sanitizes their metadata and measurements, records them, and announces each
+  stored event through `LiveViewVisualizer.Notifier`. Keeping this in one place
+  guarantees that nothing is stored unsanitized, whatever the source.
 
   The collector runs inside the observed process, for example a LiveView's
   process when called from a telemetry handler, so it does as little work as
   possible and never raises for well-formed input.
   """
 
-  alias LiveViewVisualizer.{Event, Sanitizer, Store}
+  alias LiveViewVisualizer.{Event, Notifier, Sanitizer, Store}
 
   @typedoc "What an instrumentation may hand to the collector."
   @type input :: Event.t() | [Event.t()] | :ignore
@@ -32,9 +33,9 @@ defmodule LiveViewVisualizer.Collector do
   def collect(:ignore, _sanitizer), do: :ok
 
   def collect(%Event{} = event, sanitizer) do
-    event
-    |> sanitize(sanitizer)
-    |> Store.record()
+    with :ok <- event |> sanitize(sanitizer) |> Store.record() do
+      Notifier.event_recorded(event.id)
+    end
   end
 
   def collect(events, sanitizer) when is_list(events) do

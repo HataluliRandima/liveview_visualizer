@@ -232,6 +232,14 @@ defmodule LiveViewVisualizer.TestApp.Router do
     live("/crash-mount", TestApp.CrashMountLive)
     live("/products", TestApp.ProductsLive)
   end
+
+  # Mounted exactly as the README instructs host applications to do it.
+  import LiveViewVisualizerWeb.Router
+
+  scope "/dev" do
+    pipe_through(:browser)
+    live_visualizer("/liveview")
+  end
 end
 
 defmodule LiveViewVisualizer.TestApp.Endpoint do

@@ -2,11 +2,13 @@
 
 A developer observability and visualization tool for Phoenix LiveView applications.
 
-> **Status: Phase 3.** The visualizer automatically records LiveView and
-> LiveComponent lifecycle callbacks and Ecto database queries into a bounded
-> in-memory store. Queries that run inside a LiveView callback are linked to it.
-> There is **no dashboard yet**. Events are inspected with
-> `LiveViewVisualizer.recent_events/1`. See [what is not supported yet](#not-supported-yet).
+> **Status: Phase 4.** The visualizer automatically records LiveView and
+> LiveComponent lifecycle callbacks and Ecto database queries, links queries to
+> the callback that ran them, and shows everything live in a development
+> dashboard at a route you choose, such as `/dev/liveview`.
+> See [what is not supported yet](#not-supported-yet).
+
+![LiveView DevTools dashboard: InventoryLive's handle_event("search") with its two Ecto queries, a failing handle_event("report") and its failing query, next to a CounterLive session](docs/images/dashboard.png)
 
 ## What is LiveView Lifecycle Visualizer?
 
@@ -31,11 +33,26 @@ config :liveview_visualizer,
   enabled: true
 ```
 
-```bash
-iex -S mix phx.server
+```elixir
+# lib/my_app_web/router.ex (development only, next to live_dashboard)
+if Application.compile_env(:my_app, :dev_routes) do
+  import LiveViewVisualizerWeb.Router
+
+  scope "/dev" do
+    pipe_through :browser
+    live_visualizer "/liveview"
+  end
+end
 ```
 
-Use your app in the browser, then in IEx:
+```bash
+mix phx.server
+```
+
+Open `http://localhost:4000/dev/liveview` and use your application in another
+tab. Events appear as they happen. See [Dashboard](#dashboard).
+
+You can also inspect the raw events in IEx:
 
 ```elixir
 iex> LiveViewVisualizer.recent_events()
@@ -162,11 +179,118 @@ guess:
 | Background jobs, GenServers, scripts | There is no LiveView callback |
 | `render` after `handle_event` | LiveView runs them one after another, not nested |
 
+## Dashboard
+
+```text
+LiveView lifecycle  ─┐
+                     ├─> correlation (parent_id) ─> trace tree, live in the browser
+Ecto queries        ─┘
+```
+
+### Adding the route
+
+`live_visualizer/2` mounts the dashboard, much like `live_dashboard`. Put it inside
+the development-only block that Phoenix generates in your router:
+
+```elixir
+if Application.compile_env(:my_app, :dev_routes) do
+  import LiveViewVisualizerWeb.Router
+
+  scope "/dev" do
+    pipe_through :browser
+    live_visualizer "/liveview"
+  end
+end
+```
+
+`mix phx.new` sets `dev_routes: true` only in `config/dev.exs`, so the route does
+not exist in production builds. (`if Mix.env() == :dev do ... end` in your own
+router works too. The library itself never calls `Mix.env/0`.)
+
+Options:
+
+- `live_socket_path:` - your endpoint's LiveView socket path, if not `"/live"`
+- `live_session_name:` and `as:` - change the generated `live_session` / route
+  helper names. A `live_session` cannot be nested, so do not call
+  `live_visualizer` inside one of yours.
+
+The dashboard brings its own root layout, styles and LiveView client. The client
+is inlined from your installed `phoenix_live_view`, so it always matches your
+server and nothing is loaded from the network. It works whatever your layouts,
+CSS or JavaScript look like.
+
+### Development-only safety
+
+- The dashboard refuses to mount, responding with a **404**, unless
+  `config :liveview_visualizer, enabled: true` is set and the visualizer is running.
+- There is no authentication. It is a local development tool, and the route
+  should only exist in development (see above). Do not expose it in production.
+- It shows only what is already stored (allowlisted, sanitized fields). Nothing
+  is persisted and nothing is sent anywhere.
+- Its own LiveView events are not recorded, so it never observes itself.
+
+### Reading the dashboard
+
+- **Header:** `● Recording` / `○ Paused`, the number of events, **Clear** and
+  **Pause**.
+- **Summary:** LiveViews, events, queries and errors in the current buffer.
+- **LiveViews:** every observed LiveView with its event, query and error counts.
+  Click one to filter.
+- **Trace view:** one box per **LiveView instance**, meaning one `socket_id`,
+  i.e. one LiveView on one page. An instance spans its disconnected (HTTP)
+  render, its connected process and any process it is rejoined in after a crash.
+  A `process <0.639.0>` divider marks each change of process. Inside, operations
+  are listed in start order and children are nested **only** by `parent_id`.
+  Queries appear under the callback that ran them. The `render` after a
+  `handle_event` is its own row, because LiveView does not run it inside the
+  handler. Events with no LiveView (Tasks, background jobs, `handle_info`) are
+  listed under **Outside LiveView callbacks**.
+- **Duration bars** are proportional to the slowest event in the buffer, so slow
+  operations stand out.
+- **Errors** are red, with `EXCEPTION` (the callback raised) or `ERROR` (a query
+  returned an error) badges.
+- **Event details:** click a row to see its stored fields: type, operation,
+  module, repo, source, command, rows, timings, status, exception module, error
+  code, pid, socket, parent and number of children. Messages, SQL, parameters and
+  stacktraces are not stored, so they cannot be shown.
+- **Filters and search:** LiveView, type (LiveView / LiveComponent / Ecto),
+  status (OK / Error / Exception), and a free-text search over module, event
+  name, source, repo, route, command and exception. A trace is shown if any of
+  its events matches, and the non-matching events stay visible, dimmed, as
+  context.
+
+![Filtering by type Ecto: the queries are highlighted, their handle_event parents dimmed](docs/images/dashboard-filter.png)
+
+- **Pause** freezes *the dashboard* only. Instrumentation and the store keep
+  recording, and the header counts what arrived meanwhile. **Resume** catches up.
+- **Clear** empties the visualizer's in-memory store, for every open dashboard.
+  It never touches your database, your data or your LiveViews.
+
+The screenshots are real: they were taken with headless Chromium from a small
+Phoenix application using this library.
+
+### How live updates work
+
+```text
+LiveView / Ecto ─ telemetry ─> Collector ─┬─> Store (ETS ring buffer)
+                                          └─> PubSub {:event_recorded, id}
+                                                      │
+DashboardLive <── reads only new events ── Store.since/1
+```
+
+The collector broadcasts a tiny `{:event_recorded, id}` message on a private,
+node-local `Phoenix.PubSub` server owned by the visualizer, not on your
+application's PubSub. The dashboard never polls. A burst of notifications
+schedules a single refresh 100ms later, which reads only the events recorded
+since the previous refresh (`LiveViewVisualizer.Store.since/1`). Its window never
+holds more than `max_events`.
+
 ## Not supported yet
 
 These are **not** implemented:
 
-- a dashboard UI, charts or any visualization
+- charts beyond duration bars, timelines/flame graphs, authentication, remote or
+  multi-node dashboards
 - SQL text (an explicit opt-in may come later), query plans / `EXPLAIN`, or
   automatic optimization advice
 - `handle_info` and `handle_async`: LiveView emits no telemetry for them
@@ -207,8 +331,9 @@ and no code runs in your application's processes.
 
 ### Optional dependencies
 
-`phoenix_live_view` and `ecto` are optional dependencies. Without them, the
-visualizer starts normally and the corresponding instrumentation is skipped.
+`phoenix_live_view`, `ecto` and `phoenix_pubsub` are optional dependencies.
+Without them, the visualizer starts normally and the corresponding instrumentation,
+the dashboard or its live notifications are skipped.
 
 ## Custom instrumentation
 
@@ -251,6 +376,7 @@ discovered at runtime, which is how the Ecto instrumentation follows new repos.
 LiveViewVisualizer.Application
 └── LiveViewVisualizer.Supervisor (one_for_one, empty when disabled)
     ├── LiveViewVisualizer.Store       owns the ETS ring buffer
+    ├── LiveViewVisualizer.PubSub      private, node-local change notifications
     └── LiveViewVisualizer.Telemetry   attaches LiveView + Ecto (+ configured) instrumentations
 
 LiveView process                               Ecto caller (any process)
@@ -276,6 +402,10 @@ LiveView process                               Ecto caller (any process)
 | `LiveViewVisualizer.Collector` | Single path into the store, always sanitizes |
 | `LiveViewVisualizer.Sanitizer` | Redaction and size limits for arbitrary terms |
 | `LiveViewVisualizer.Store` | Bounded, concurrent, in-memory ring buffer |
+| `LiveViewVisualizer.Notifier` | Tiny "event recorded" / "cleared" notifications over a private PubSub |
+| `LiveViewVisualizer.Trace` | Pure functions: events → stats, LiveView list, trees, filters, search |
+| `LiveViewVisualizerWeb.Router` | `live_visualizer/2` route macro with a self-contained layout |
+| `LiveViewVisualizerWeb.DashboardLive` | The dashboard itself |
 
 Handlers run inside your processes, so they do the minimum: a few map lookups,
 one small struct, a small sanitize pass and two ETS writes. A `:start` handler
@@ -350,14 +480,16 @@ unreachable, tests tagged `:postgres` are excluded and a notice is printed.
 The suite includes real Phoenix LiveView and PostgreSQL integration tests:
 lifecycle order, components, query correlation (and its absence for Tasks,
 `handle_info` and background processes), multiple repos, metadata safety,
-failures, disabled mode, and a separate VM booted with neither LiveView nor Ecto.
+failures, disabled mode, a separate VM booted with neither LiveView nor Ecto, and
+the dashboard: trees, filters, search, details, pause, clear, live updates,
+404 when disabled, and what it can and cannot render.
 
 ## Roadmap
 
 - **Phase 1 – Foundation**: config, event model, store, sanitizer, telemetry plumbing.
 - **Phase 2 – LiveView lifecycle instrumentation.**
-- **Phase 3 – Ecto query instrumentation and callback correlation** (this release).
-- **Phase 4 – Dev dashboard**: a LiveView UI at a development-only route.
+- **Phase 3 – Ecto query instrumentation and callback correlation.**
+- **Phase 4 – Live developer dashboard** (this release).
 - **Later**: `handle_info` / `handle_async`, assigns diffs, processes and tasks,
   PubSub, opt-in SQL view.
 

@@ -9,6 +9,10 @@ defmodule LiveViewVisualizer do
   (`LiveViewVisualizer.Context`). Inspect them with `recent_events/1`. No changes
   to LiveViews, contexts, schemas or repos are needed.
 
+  Add `LiveViewVisualizerWeb.Router.live_visualizer/2` to a development-only
+  scope of your router to watch the events live in the browser
+  (`LiveViewVisualizerWeb.DashboardLive`).
+
   The building blocks are:
 
     * `LiveViewVisualizer.Config` - centralized, safe-by-default configuration
@@ -18,11 +22,11 @@ defmodule LiveViewVisualizer do
     * `LiveViewVisualizer.Telemetry` - failure-isolated `:telemetry` handler management
     * `LiveViewVisualizer.Instrumentation` - the behaviour that event sources implement
 
-  Process and PubSub instrumentation and the dashboard are not implemented
-  yet. See the README for the roadmap.
+  Process and PubSub instrumentation are not implemented yet. See the README
+  for the roadmap.
   """
 
-  alias LiveViewVisualizer.{Config, Event, Store}
+  alias LiveViewVisualizer.{Config, Event, Notifier, Store}
 
   @doc """
   Returns whether the visualizer is enabled in configuration.
@@ -39,8 +43,13 @@ defmodule LiveViewVisualizer do
   def recent_events(limit \\ nil), do: Store.recent(limit)
 
   @doc """
-  Removes all stored events.
+  Removes all stored events and notifies subscribers such as the dashboard.
+
+  Only the visualizer's in-memory store is affected.
   """
   @spec clear_events() :: :ok
-  defdelegate clear_events, to: Store, as: :clear
+  def clear_events do
+    :ok = Store.clear()
+    Notifier.events_cleared()
+  end
 end

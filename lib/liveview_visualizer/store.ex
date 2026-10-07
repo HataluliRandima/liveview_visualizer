@@ -91,6 +91,32 @@ defmodule LiveViewVisualizer.Store do
   end
 
   @doc """
+  Returns the events recorded after sequence number `after_seq`, oldest first,
+  together with the latest sequence number.
+
+  Lets a reader such as the dashboard fetch only what is new: pass `0` the
+  first time, then the returned sequence number. Only events still retained
+  are returned, so after a long gap this returns at most `capacity/0` events.
+
+  A returned sequence number lower than `after_seq` means the store restarted.
+  Returns `{0, []}` if the store is not running.
+  """
+  @spec since(non_neg_integer()) :: {non_neg_integer(), [Event.t()]}
+  def since(after_seq) when is_integer(after_seq) and after_seq >= 0 do
+    [{:seq, last_seq, capacity}] = :ets.lookup(@table, :seq)
+    first = max(after_seq + 1, last_seq - capacity + 1)
+
+    events =
+      for seq <- first..last_seq//1,
+          {_slot, ^seq, event} <- :ets.lookup(@table, rem(seq - 1, capacity)),
+          do: event
+
+    {last_seq, events}
+  rescue
+    ArgumentError -> {0, []}
+  end
+
+  @doc """
   Removes all stored events.
 
   Sequence numbers are not reset, so events recorded concurrently with a clear

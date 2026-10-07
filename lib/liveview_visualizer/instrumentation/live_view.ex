@@ -82,6 +82,11 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
       because they can contain application data.
 
   Missing values are `nil`. Extraction never raises for unexpected metadata.
+
+  ## The visualizer's own dashboard
+
+  Events from `LiveViewVisualizerWeb.DashboardLive` are ignored, otherwise
+  each dashboard render would record events that trigger another refresh.
   """
 
   @behaviour LiveViewVisualizer.Instrumentation
@@ -101,6 +106,10 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
   ]
 
   @destroyed [:phoenix, :live_component, :destroyed]
+
+  # The visualizer's own LiveViews. Recording them would make every dashboard
+  # render produce events that trigger another dashboard refresh, forever.
+  @own_views [LiveViewVisualizerWeb.DashboardLive]
 
   @impl true
   def events, do: events_for(live_view_version())
@@ -147,6 +156,9 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
   end
 
   @impl true
+  def handle_event(_event, _measurements, %{socket: %{view: view}}) when view in @own_views,
+    do: :ignore
+
   def handle_event([:phoenix, :live_component, :destroyed] = source, _measurements, metadata) do
     socket = Map.get(metadata, :live_view_socket)
     component = atom_or_nil(Map.get(metadata, :component))

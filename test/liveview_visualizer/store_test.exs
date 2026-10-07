@@ -106,6 +106,34 @@ defmodule LiveViewVisualizer.StoreTest do
     assert indexes(Store.recent()) == Enum.to_list(1..@capacity)
   end
 
+  describe "since/1" do
+    test "returns only events recorded after a sequence number" do
+      {seq, _} = Store.since(0)
+
+      for i <- 1..3, do: Store.record(event(i))
+      {seq2, events} = Store.since(seq)
+      assert indexes(events) == [1, 2, 3]
+      assert seq2 == seq + 3
+
+      Store.record(event(4))
+      assert {seq3, [%Event{metadata: %{i: 4}}]} = Store.since(seq2)
+      assert Store.since(seq3) == {seq3, []}
+    end
+
+    test "returns at most the retained events after a long gap" do
+      {seq, _} = Store.since(0)
+      for i <- 1..250, do: Store.record(event(i))
+
+      {_, events} = Store.since(seq)
+      assert indexes(events) == Enum.to_list(151..250)
+    end
+
+    test "returns {0, []} when the store is not running" do
+      stop_child(Store)
+      assert Store.since(0) == {0, []}
+    end
+  end
+
   test "clear/0 removes all events and the store keeps working" do
     for i <- 1..5, do: Store.record(event(i))
 

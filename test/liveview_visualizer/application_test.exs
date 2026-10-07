@@ -8,12 +8,18 @@ defmodule LiveViewVisualizer.ApplicationTest do
   @app :liveview_visualizer
 
   describe "when enabled" do
-    test "starts the store and telemetry under the visualizer supervisor, in order" do
+    test "starts the store, notifications and telemetry under the visualizer supervisor, in order" do
       children = Supervisor.which_children(LiveViewVisualizer.Supervisor)
 
       # which_children/1 lists children in reverse start order.
-      assert [{Telemetry, telemetry_pid, :worker, _}, {Store, store_pid, :worker, _}] = children
+      assert [
+               {Telemetry, telemetry_pid, :worker, _},
+               {LiveViewVisualizer.PubSub, pubsub_pid, :supervisor, _},
+               {Store, store_pid, :worker, _}
+             ] = children
+
       assert Process.alive?(store_pid)
+      assert Process.alive?(pubsub_pid)
       assert Process.alive?(telemetry_pid)
       assert :ets.whereis(Store) != :undefined
     end

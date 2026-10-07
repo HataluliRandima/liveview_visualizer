@@ -270,6 +270,19 @@ defmodule LiveViewVisualizer.Instrumentation.LiveViewTest do
     end
   end
 
+  test "ignores the visualizer's own dashboard so it cannot observe itself" do
+    dashboard = socket(view: LiveViewVisualizerWeb.DashboardLive)
+    stop = [:phoenix, :live_view, :render, :stop]
+
+    for event <- [
+          [:phoenix, :live_view, :render, :start],
+          stop,
+          [:phoenix, :live_view, :handle_event, :exception]
+        ] do
+      assert Instrumentation.handle_event(event, %{duration: 1}, %{socket: dashboard}) == :ignore
+    end
+  end
+
   describe "handle_event/3 for destroyed" do
     test "records a point-in-time :live_component event" do
       event =

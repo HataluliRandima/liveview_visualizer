@@ -40,6 +40,8 @@ defmodule LiveViewVisualizer.MixProject do
       # Optional: the Ecto instrumentation activates only when the host
       # application uses Ecto itself.
       {:ecto, "~> 3.10", optional: true},
+      # Optional: live dashboard notifications. Present whenever Phoenix is.
+      {:phoenix_pubsub, "~> 2.0", optional: true},
       # Real database for the integration tests, started by test_helper.exs.
       {:ecto_sql, "~> 3.10", only: :test, runtime: false},
       {:postgrex, ">= 0.0.0", only: :test, runtime: false},
@@ -62,7 +64,8 @@ defmodule LiveViewVisualizer.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md"]
+      extras: ["README.md"],
+      assets: %{"docs/images" => "docs/images"}
     ]
   end
 end
