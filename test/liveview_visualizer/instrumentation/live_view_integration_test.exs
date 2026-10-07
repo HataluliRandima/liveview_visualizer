@@ -49,7 +49,8 @@ defmodule LiveViewVisualizer.Instrumentation.LiveViewIntegrationTest do
                :exception
              ])
 
-      refute {Telemetry, Instrumentation} in handler_ids.([:phoenix, :live_view, :mount, :start])
+      # :start is attached for correlation (see LiveViewVisualizer.Context).
+      assert {Telemetry, Instrumentation} in handler_ids.([:phoenix, :live_view, :mount, :start])
     end
   end
 

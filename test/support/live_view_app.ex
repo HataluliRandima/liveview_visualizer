@@ -125,6 +125,85 @@ defmodule LiveViewVisualizer.TestApp.CrashMountLive do
   def render(assigns), do: ~H"<div></div>"
 end
 
+defmodule LiveViewVisualizer.TestApp.StockComponent do
+  @moduledoc false
+  # Queries the database from update/2, i.e. during the parent's render.
+  use Phoenix.LiveComponent
+
+  alias LiveViewVisualizer.TestApp.Products
+
+  @impl true
+  def update(assigns, socket),
+    do: {:ok, socket |> assign(assigns) |> assign(stock: length(Products.list_stock_levels()))}
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <span id={@id}>Stock rows: {@stock}</span>
+    """
+  end
+end
+
+defmodule LiveViewVisualizer.TestApp.ProductsLive do
+  @moduledoc false
+  # An ordinary LiveView that uses an ordinary context. Nothing here refers to
+  # the visualizer.
+  use Phoenix.LiveView
+
+  alias LiveViewVisualizer.TestApp.{Products, StockComponent}
+  alias LiveViewVisualizer.TestRepo
+
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, assign(socket, count: Products.count(), products: [], show_stock: false)}
+  end
+
+  @impl true
+  def handle_event("load", _params, socket) do
+    products = Products.list_products()
+    _stock = Products.list_stock_levels()
+    {:noreply, assign(socket, products: products)}
+  end
+
+  def handle_event("search", %{"q" => q}, socket),
+    do: {:noreply, assign(socket, products: Products.search(q))}
+
+  def handle_event("load_in_task", _params, socket) do
+    products = Task.async(fn -> Products.list_products() end) |> Task.await()
+    {:noreply, assign(socket, products: products)}
+  end
+
+  def handle_event("load_later", _params, socket) do
+    send(self(), :load)
+    {:noreply, socket}
+  end
+
+  def handle_event("show_stock", _params, socket),
+    do: {:noreply, assign(socket, show_stock: true)}
+
+  def handle_event("fail", _params, socket) do
+    TestRepo.query!("SELECT * FROM lvv_table_that_does_not_exist")
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info(:load, socket),
+    do: {:noreply, assign(socket, products: Products.list_products())}
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div>
+      <p id="count">Products: {@count}</p>
+      <ul>
+        <li :for={product <- @products}>{product.name}</li>
+      </ul>
+      <.live_component :if={@show_stock} module={StockComponent} id="stock" />
+    </div>
+    """
+  end
+end
+
 defmodule LiveViewVisualizer.TestApp.ErrorHTML do
   @moduledoc false
   # Phoenix renders this for exceptions raised during a request, like any app.
@@ -151,6 +230,7 @@ defmodule LiveViewVisualizer.TestApp.Router do
     live("/components", TestApp.ComponentsLive)
     live("/crash", TestApp.CrashLive)
     live("/crash-mount", TestApp.CrashMountLive)
+    live("/products", TestApp.ProductsLive)
   end
 end
 

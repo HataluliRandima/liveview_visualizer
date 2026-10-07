@@ -67,10 +67,15 @@ defmodule LiveViewVisualizer.Instrumentation do
   Converts one telemetry event into zero or more events.
 
   Return `:ignore` to skip the telemetry event.
+
+  Return `{:attach, event_names}` to have more telemetry events attached to
+  this instrumentation, for event names that are only discovered at runtime
+  (see `LiveViewVisualizer.Instrumentation.Ecto`). They are attached before the
+  handler returns. Already attached names are ignored.
   """
   @callback handle_event(
               event_name :: :telemetry.event_name(),
               measurements :: :telemetry.event_measurements(),
               metadata :: :telemetry.event_metadata()
-            ) :: Event.t() | [Event.t()] | :ignore
+            ) :: Event.t() | [Event.t()] | :ignore | {:attach, [:telemetry.event_name()]}
 end

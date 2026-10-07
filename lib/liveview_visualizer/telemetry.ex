@@ -8,11 +8,25 @@ defmodule LiveViewVisualizer.Telemetry do
 
   ## Built-in instrumentations
 
-  `LiveViewVisualizer.Instrumentation.LiveView` is always attached first,
+  `LiveViewVisualizer.Instrumentation.LiveView` and
+  `LiveViewVisualizer.Instrumentation.Ecto` are always attached first,
   followed by any modules configured under `:instrumentations`. An
   instrumentation whose library is not installed (its
   `c:LiveViewVisualizer.Instrumentation.events/0` returns `[]`) is skipped with
   a debug log. Nothing needs to be configured besides `enabled: true`.
+
+  ## Runtime attachment
+
+  Some event names are only known at runtime. For example each Ecto repository
+  chooses its own `telemetry_prefix`. An instrumentation can return
+  `{:attach, event_names}` from a handler, and those events are attached
+  synchronously, before the handler returns, with the same failure isolation.
+  Requests are serialized through this process, so they cannot race with
+  `detach/1`.
+
+  Attaching, detaching and restarting all advance the
+  `LiveViewVisualizer.Context` epoch, so correlation state from spans that
+  started under different handlers is never trusted.
 
   ## Failure isolation
 
@@ -37,9 +51,9 @@ defmodule LiveViewVisualizer.Telemetry do
 
   require Logger
 
-  alias LiveViewVisualizer.{Collector, Config, Instrumentation, Sanitizer}
+  alias LiveViewVisualizer.{Collector, Config, Context, Instrumentation, Sanitizer}
 
-  @builtin_instrumentations [Instrumentation.LiveView]
+  @builtin_instrumentations [Instrumentation.LiveView, Instrumentation.Ecto]
 
   @doc """
   Starts the handler manager.
@@ -99,11 +113,19 @@ defmodule LiveViewVisualizer.Telemetry do
   def handle_telemetry_event(event_name, measurements, metadata, config) do
     %{instrumentation: instrumentation, sanitizer: sanitizer} = config
 
-    case instrumentation.handle_event(event_name, measurements, metadata)
-         |> Collector.collect(sanitizer) do
-      :ok -> :ok
-      {:error, :not_running} -> :ok
-      {:error, {:invalid_event, _}} -> report_failure(config, event_name, :invalid_return)
+    case instrumentation.handle_event(event_name, measurements, metadata) do
+      {:attach, events} ->
+        case safe_call({:attach_events, instrumentation, events}) do
+          :ok -> :ok
+          {:error, reason} -> report_failure(config, event_name, {:attach_failed, reason})
+        end
+
+      result ->
+        case Collector.collect(result, sanitizer) do
+          :ok -> :ok
+          {:error, :not_running} -> :ok
+          {:error, {:invalid_event, _}} -> report_failure(config, event_name, :invalid_return)
+        end
     end
   rescue
     exception -> report_failure(config, event_name, {:error, exception.__struct__})
@@ -116,9 +138,14 @@ defmodule LiveViewVisualizer.Telemetry do
     # Trap exits so terminate/2 runs on shutdown and handlers are detached.
     Process.flag(:trap_exit, true)
 
+    # Spans started under a previous instance of this process are no longer
+    # trustworthy parents.
+    Context.bump_epoch()
+
     state = %{
       sanitizer: Sanitizer.new(redact_keys: Config.redact_keys()),
-      attached: []
+      attached: [],
+      handlers: %{}
     }
 
     instrumentations = Keyword.get_lazy(opts, :instrumentations, &default_instrumentations/0)
@@ -160,10 +187,27 @@ defmodule LiveViewVisualizer.Telemetry do
 
   def handle_call({:detach, instrumentation}, _from, state) do
     if instrumentation in state.attached do
-      :telemetry.detach(handler_id(instrumentation))
-      {:reply, :ok, %{state | attached: List.delete(state.attached, instrumentation)}}
+      {:reply, :ok, remove_handlers(state, instrumentation)}
     else
       {:reply, {:error, :not_attached}, state}
+    end
+  end
+
+  # Requested by an instrumentation from inside a handler, for event names that
+  # are only known at runtime (for example a Repo's query event, announced by
+  # [:ecto, :repo, :init]). Serialized here so it cannot race with detach/1.
+  def handle_call({:attach_events, instrumentation, events}, _from, state) do
+    case state.handlers do
+      %{^instrumentation => handler} when is_list(events) ->
+        if Enum.all?(events, &valid_event_name?/1) do
+          handler = attach_dynamic(instrumentation, handler, events)
+          {:reply, :ok, put_in(state.handlers[instrumentation], handler)}
+        else
+          {:reply, {:error, :invalid_events}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :not_attached}, state}
     end
   end
 
@@ -173,7 +217,7 @@ defmodule LiveViewVisualizer.Telemetry do
 
   @impl GenServer
   def terminate(_reason, state) do
-    Enum.each(state.attached, &:telemetry.detach(handler_id(&1)))
+    Enum.reduce(state.attached, state, &remove_handlers(&2, &1))
   end
 
   defp default_instrumentations do
@@ -186,7 +230,9 @@ defmodule LiveViewVisualizer.Telemetry do
       handler_id = handler_id(instrumentation)
 
       # Detach first so attaching is idempotent, including after a restart of
-      # this process that skipped terminate/2.
+      # this process that skipped terminate/2. Dynamic handlers are dropped
+      # too; events/0 is expected to report what is still relevant.
+      state = remove_handlers(state, instrumentation)
       :telemetry.detach(handler_id)
 
       config = %{
@@ -202,8 +248,15 @@ defmodule LiveViewVisualizer.Telemetry do
              config
            ) do
         :ok ->
-          attached = [instrumentation | List.delete(state.attached, instrumentation)]
-          {:ok, %{state | attached: attached}}
+          Context.bump_epoch()
+          handler = %{config: config, events: MapSet.new(events), dynamic: []}
+
+          {:ok,
+           %{
+             state
+             | attached: [instrumentation | state.attached],
+               handlers: Map.put(state.handlers, instrumentation, handler)
+           }}
 
         {:error, reason} ->
           {:error, reason}
@@ -242,6 +295,44 @@ defmodule LiveViewVisualizer.Telemetry do
 
   defp handler_id(instrumentation), do: {__MODULE__, instrumentation}
 
+  defp dynamic_handler_id(instrumentation, event), do: {__MODULE__, {instrumentation, event}}
+
+  # Attaches the events this instrumentation is not attached to yet, each under
+  # its own handler id so existing handlers are never briefly detached.
+  defp attach_dynamic(instrumentation, handler, events) do
+    new_events =
+      events
+      |> Enum.uniq()
+      |> Enum.reject(&MapSet.member?(handler.events, &1))
+      |> Enum.filter(&attach_one(instrumentation, &1, handler.config))
+
+    %{
+      handler
+      | events: MapSet.union(handler.events, MapSet.new(new_events)),
+        dynamic: new_events ++ handler.dynamic
+    }
+  end
+
+  defp attach_one(instrumentation, event, config) do
+    id = dynamic_handler_id(instrumentation, event)
+    :telemetry.detach(id)
+    :telemetry.attach(id, event, &__MODULE__.handle_telemetry_event/4, config) == :ok
+  end
+
+  defp remove_handlers(state, instrumentation) do
+    case Map.pop(state.handlers, instrumentation) do
+      {nil, _handlers} ->
+        state
+
+      {handler, handlers} ->
+        :telemetry.detach(handler_id(instrumentation))
+        Enum.each(handler.dynamic, &:telemetry.detach(dynamic_handler_id(instrumentation, &1)))
+        Context.bump_epoch()
+
+        %{state | handlers: handlers, attached: List.delete(state.attached, instrumentation)}
+    end
+  end
+
   defp report_failure(%{failures: failures, instrumentation: instrumentation}, event_name, reason) do
     if :atomics.add_get(failures, 1, 1) == 1 do
       Logger.warning(
@@ -259,7 +350,9 @@ defmodule LiveViewVisualizer.Telemetry do
   defp describe({:error, exception_module}), do: "raised #{inspect(exception_module)}"
 
   defp describe(:invalid_return),
-    do: "returned something other than an Event, a list of Events or :ignore"
+    do: "returned something other than an Event, a list of Events, :ignore or {:attach, events}"
+
+  defp describe({:attach_failed, reason}), do: "could not attach events: #{inspect(reason)}"
 
   defp describe(kind), do: "#{kind}"
 

@@ -14,3 +14,21 @@ config :liveview_visualizer, LiveViewVisualizer.TestApp.Endpoint,
   server: false
 
 config :phoenix, :json_library, Jason
+
+# A dedicated database on a local PostgreSQL server; override with LVV_DATABASE_URL.
+database_url =
+  System.get_env(
+    "LVV_DATABASE_URL",
+    "ecto://postgres:postgres@localhost:5432/liveview_visualizer_test"
+  )
+
+config :liveview_visualizer, LiveViewVisualizer.TestRepo,
+  url: database_url,
+  pool_size: 5,
+  log: false
+
+config :liveview_visualizer, LiveViewVisualizer.AnalyticsRepo,
+  url: database_url,
+  pool_size: 2,
+  log: false,
+  telemetry_prefix: [:analytics, :db]

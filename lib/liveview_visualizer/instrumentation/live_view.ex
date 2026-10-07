@@ -34,20 +34,29 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
 
   ## Spans
 
-  Only the `:stop` and `:exception` events of each span are attached. Each
-  recorded event therefore represents a *completed* operation:
+  One event is recorded per *completed* operation, on the span's `:stop` or
+  `:exception` event:
 
-    * `:telemetry.span/3` computes `duration` from the same start timestamp it
-      emits in the `:start` event and passes the same `telemetry_span_context`,
-      so `:stop` and `:exception` already carry everything the start event had.
-      Attaching to `:start` as well would only add work to the LiveView process.
-    * The start time is derived exactly as `stop monotonic_time - duration`.
+    * `duration` comes from `:telemetry.span/3`. The start time is derived
+      exactly as `stop monotonic_time - duration`.
     * `:exception` events are recorded with `status: :exception`.
 
-  `parent_id` and `trace_id` are left `nil`. LiveView callbacks run one after
-  another, not nested (`render` runs after `handle_event` returns), so span
-  nesting cannot express the relationship that matters most. Inferring one
-  would mean inventing data. Correlation is planned for a later phase.
+  The `:start` event is also attached, but records nothing. It calls
+  `LiveViewVisualizer.Context.enter/1` with the span's `telemetry_span_context`,
+  so the event id is allocated when the callback starts. Anything that happens
+  inside the callback in the same process, such as an Ecto query or a nested
+  LiveComponent update during a render, can then reference it as its parent.
+  `:stop`/`:exception` look up the same span context to reuse that id.
+
+  ## Parent and trace ids
+
+    * `parent_id` is the enclosing span *in the same process*. A LiveComponent
+      `update` during a `render` has that render as its parent. Top-level
+      callbacks have no parent.
+    * `trace_id` is the id of the outermost such span (its own id at the top level).
+    * `handle_event` and the `render` that follows it are *not* linked. LiveView
+      runs them one after another, not nested, so there is no parent
+      relationship to record. Grouping them is a presentation concern.
 
   ## Metadata
 
@@ -77,7 +86,7 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
 
   @behaviour LiveViewVisualizer.Instrumentation
 
-  alias LiveViewVisualizer.Event
+  alias LiveViewVisualizer.{Context, Event}
 
   # Phoenix is only guaranteed to be present when LiveView is.
   @compile {:no_warn_undefined, Phoenix.Router}
@@ -108,7 +117,8 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
   def events_for(version) when is_binary(version) do
     case Version.parse(version) do
       {:ok, parsed} ->
-        span_events = for span <- @spans, suffix <- [:stop, :exception], do: span ++ [suffix]
+        span_events =
+          for span <- @spans, suffix <- [:start, :stop, :exception], do: span ++ [suffix]
 
         if Version.compare(parsed, "1.1.0") == :lt,
           do: span_events,
@@ -155,8 +165,25 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
     )
   end
 
+  def handle_event([:phoenix, scope, _name, :start], _measurements, metadata)
+      when scope in [:live_view, :live_component] do
+    case Map.get(metadata, :telemetry_span_context) do
+      nil -> :ok
+      span_context -> Context.enter(span_context)
+    end
+
+    :ignore
+  end
+
   def handle_event([:phoenix, scope, name, outcome] = source, measurements, metadata)
       when scope in [:live_view, :live_component] and outcome in [:stop, :exception] do
+    # Release the context first, so nothing below can leave it behind.
+    ids =
+      case Map.get(metadata, :telemetry_span_context) do
+        nil -> nil
+        span_context -> Context.exit(span_context)
+      end
+
     duration = Map.get(measurements, :duration, 0)
 
     stop_time =
@@ -169,15 +196,18 @@ defmodule LiveViewVisualizer.Instrumentation.LiveView do
     {type, module, fields} = describe(scope, name, metadata)
 
     Event.new!(
-      type: type,
-      name: name,
-      status: if(outcome == :stop, do: :ok, else: :exception),
-      module: module,
-      source: source,
-      monotonic_time: start_time,
-      system_time: start_time + System.time_offset(),
-      duration: duration,
-      metadata: if(outcome == :exception, do: put_failure(fields, metadata), else: fields)
+      Map.to_list(ids || %{}) ++
+        [
+          type: type,
+          name: name,
+          status: if(outcome == :stop, do: :ok, else: :exception),
+          module: module,
+          source: source,
+          monotonic_time: start_time,
+          system_time: start_time + System.time_offset(),
+          duration: duration,
+          metadata: if(outcome == :exception, do: put_failure(fields, metadata), else: fields)
+        ]
     )
   end
 
